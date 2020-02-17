@@ -149,7 +149,7 @@ int main()
             matchesSmoker();
     }
 
-    lock(finishSemId, 1, AMOUNT_OF_ITERATIONS); 
+    lock(finishSemId, 0, AMOUNT_OF_ITERATIONS); 
     kill(agentId, 9);
     kill(tobaccoSmokerId, 9);
     kill(paperSmokerId, 9);
@@ -171,7 +171,7 @@ void agent()
         unlock(priceChangeSemId, 0, 3);
         sleep(AGENT_SLEEP);
 
-        unlock(finishSemId, 1, 1);
+        unlock(finishSemId, 0, 1);
     }
 }
 
@@ -181,12 +181,15 @@ void tobaccoSmoker()
     {
         lock(priceChangeSemId, 0, 1);
         msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
+        printf("1 kladzie na stol tyton\n");
         if(smokersBalance[0] >= components[1].price + components[2].price)
         {  
             msgrcv(componentsMsgId, components + 1, sizeof(components[1].price), 2, 0);
             if(msgrcv(componentsMsgId, components + 2, sizeof(components[2].price), 3, IPC_NOWAIT) == -1)
+            {
                 if(errno == ENOMSG)
                     msgsnd(componentsMsgId, components + 1, sizeof(components[1].price), 0);
+            }
             else
             {
                 lock(moneyTransferSemId, 0, 1);
@@ -216,12 +219,15 @@ void paperSmoker()
     {
         lock(priceChangeSemId, 0, 1);
         msgsnd(componentsMsgId, components, sizeof(components[1].price), 0);
+        printf("2 kladzie na stol papier\n");
         if(smokersBalance[0] >= components[0].price + components[2].price)
         {  
             msgrcv(componentsMsgId, components, sizeof(components[0].price), 1, 0);
             if(msgrcv(componentsMsgId, components + 2, sizeof(components[2].price), 3, IPC_NOWAIT) == -1)
+            {
                 if(errno == ENOMSG)
                     msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
+            }
             else
             {
                 lock(moneyTransferSemId, 1, 1);
@@ -250,12 +256,15 @@ void matchesSmoker()
     {
         lock(priceChangeSemId, 0, 1);
         msgsnd(componentsMsgId, components, sizeof(components[2].price), 0);
+        printf("3 kladzie na stol zapalki\n");
         if(smokersBalance[0] >= components[0].price + components[1].price)
         {  
             msgrcv(componentsMsgId, components, sizeof(components[0].price), 1, 0);
             if(msgrcv(componentsMsgId, components + 1, sizeof(components[1].price), 2, IPC_NOWAIT) == -1)
+            {
                 if(errno == ENOMSG)
                     msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
+            }
             else
             {
                 lock(moneyTransferSemId, 2, 1);
