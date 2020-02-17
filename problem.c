@@ -11,8 +11,9 @@
 #define SMOKER_STARTING_MONEY 30
 #define AGENT_SLEEP 2
 #define SMOKER_SLEEP 1
-#define COMPONENT_ON_TABLE 1
-#define COMPONENT_NOT_ON_TABLE 0
+#define COMPONENT_ON_TABLE 2
+#define COMPONENT_NOT_ON_TABLE 1
+#define AMOUNT_OF_ITERATIONS 5
 #define PRICES_SHM_KEY 10000
 #define SMOKER_BALANCE_SHM_KEY 20000
 #define PRICES_SEM_KEY 30000
@@ -20,16 +21,17 @@
 #define TOBACCO_MSG_KEY 50000
 #define PAPER_MSG_KEY 60000
 #define MATCHES_MSG_KEY 70000
+#define FINISH_SEM_KEY 99999
 
 typedef struct
 {
-    short on_table;
+    long on_table;
     int price;
 } Component;
 
 int agentId, tobaccoSmokerId, paperSmokerId, matchesSmokerId;
-int pricesShmId, smokersShmId, priceChangeSemId, moneyTransferSemId, tobaccoMsgId, paperMsgId, matchesMsgId;
-int *smokersBalance, iterations = 0;
+int pricesShmId, smokersShmId, finishSemId, priceChangeSemId, moneyTransferSemId, tobaccoMsgId, paperMsgId, matchesMsgId;
+int *smokersBalance;
 Component *components;
 
 void agent();
@@ -51,7 +53,7 @@ int main()
     components = (Component*)shmat(pricesShmId, NULL, 0);
     for(int i = 0; i < 3; i++)
     {
-        components[i].on_table = 0;
+        components[i].on_table = 1;
         components[i].price = 5;
     }
 
@@ -62,7 +64,7 @@ int main()
         perror("Utworzenie obszaru pamieci wspoldzielonej (palacze)");
         exit(1);
     }
-    smokersBalance = (*int)shmat(smokersShmId, NULL, 0);
+    smokersBalance = (int*)shmat(smokersShmId, NULL, 0);
     for(int i = 0; i < 3; i++)
         smokersBalance[i] = SMOKER_STARTING_MONEY;
 
@@ -93,6 +95,18 @@ int main()
             exit(1);
         }
 
+    // SEMAFOR DO KONCZENIA PROGRAMU
+    finishSemId = semget(FINISH_SEM_KEY, 1, IPC_CREAT|0600);
+    if(finishSemId == -1)
+    {
+        perror("Utworzenie semafora (koniec)");
+        exit(1);
+    }
+    if(semctl(finishSemId, 0, SETVAL, 0) == -1)
+    {
+        perror("Nadanie wartosci semaforowi (koniec)");
+        exit(1);
+    }
     // KOLEJKA KOMUNIKATOW (TYTOŃ) 
     tobaccoMsgId = msgget(TOBACCO_MSG_KEY, IPC_CREAT|0600);
     if(tobaccoMsgId == -1)
@@ -114,7 +128,6 @@ int main()
         perror("Utworzenie kolejki komunikatow (zapalki)");
         exit(1);
     }
-
 
     // FORKI    
     switch(agentId = fork())
@@ -149,7 +162,8 @@ int main()
         case 0:
             matchesSmoker();
     }
-    while(iterations <= 5);
+
+    lock(finishSemId, 1, AMOUNT_OF_ITERATIONS); 
     kill(agentId, 9);
     kill(tobaccoSmokerId, 9);
     kill(paperSmokerId, 9);
@@ -165,11 +179,9 @@ void agent()
         for(int i = 0; i < 3; i++)
             components[i].price = rand() % (SMOKER_STARTING_MONEY / 3) + 1;
         unlock(priceChangeSemId, 0, 3);
-        
-        iterations++;
         sleep(AGENT_SLEEP);
-        if(iterations >= 5)
-            break;
+
+        unlock(finishSemId, 1, 1);
     }
 }
 
@@ -178,17 +190,17 @@ void tobaccoSmoker()
     for(;;)
     {
         components[0].on_table = COMPONENT_ON_TABLE;
-        msgsnd(tobaccoMsgId, &components[0], sizeof(components[0].on_table), 0);
+        msgsnd(tobaccoMsgId, &components[0], sizeof(components[0].price), 0);
         
         lock(priceChangeSemId, 0, 1);
         if(smokersBalance[0] >= components[1].price + components[2].price)
         {
-            msgrcv(paperMsgId, &components[1], sizeof(components[1].on_table), COMPONENT_ON_TABLE);
-            msgrcv(matchesMsgId, &components[2], sizeof(components[2].on_table), COMPONENT_ON_TABLE);
+            msgrcv(paperMsgId, &components[1], sizeof(components[1].price), COMPONENT_ON_TABLE);
+            msgrcv(matchesMsgId, &components[2], sizeof(components[2].price), COMPONENT_ON_TABLE);
             components[1].on_table = COMPONENT_NOT_ON_TABLE;
             components[2].on_table = COMPONENT_NOT_ON_TABLE;
-            msgsnd(paperMsgId, &components[1], sizeof(components[1].on_table), 0);
-            msgsnd(matchesMsgId, &components[2], sizeof(components[2].on_table), 0);
+            msgsnd(paperMsgId, &components[1], sizeof(components[1].price), 0);
+            msgsnd(matchesMsgId, &components[2], sizeof(components[2].price), 0);
             
             lock(moneyTransferSemId, 0, 1);
             smokersBalance[0] -= components[1].price + components[2].price;
@@ -201,6 +213,8 @@ void tobaccoSmoker()
             lock(moneyTransferSemId, 2, 1);
             smokersBalance[2] += components[2].price;
             unlock(moneyTransferSemId, 2, 1);
+
+            sleep(SMOKER_SLEEP);
         }
         unlock(priceChangeSemId, 0, 1);
     }
