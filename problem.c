@@ -51,7 +51,7 @@ int main()
     components = (Component*)shmat(pricesShmId, NULL, 0);
     for(int i = 0; i < 3; i++)
     {
-        components[i].on_table = i + 1;
+        components[i].id = i + 1;
         components[i].price = 5;
     }
 
@@ -175,21 +175,29 @@ void tobaccoSmoker()
     for(;;)
     {
         lock(priceChangeSemId, 0, 1);
+        msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
         if(smokersBalance[0] >= components[1].price + components[2].price)
         {  
-            lock(moneyTransferSemId, 0, 1);
-            smokersBalance[0] -= components[1].price + components[2].price;
-            unlock(moneyTransferSemId, 0, 1);
-            
-            lock(moneyTransferSemId, 1, 1);
-            smokersBalance[1] += components[1].price;
-            unlock(moneyTransferSemId, 1, 1);
+            msgrcv(componentsMsgId, components + 1, sizeof(components[1].price), 1, 0);
+            msgrcv(componentsMsgId, components + 2, sizeof(components[2].price), 2, IPC_NOWAIT);
+            if (errno == ENOMSG)
+                msgsnd(componentsMsgId, components + 1, sizeof(components[1].price), 0);
+            else
+            {
+                lock(moneyTransferSemId, 0, 1);
+                smokersBalance[0] -= components[1].price + components[2].price;
+                unlock(moneyTransferSemId, 0, 1);
+                
+                lock(moneyTransferSemId, 1, 1);
+                smokersBalance[1] += components[1].price;
+                unlock(moneyTransferSemId, 1, 1);
 
-            lock(moneyTransferSemId, 2, 1);
-            smokersBalance[2] += components[2].price;
-            unlock(moneyTransferSemId, 2, 1);
+                lock(moneyTransferSemId, 2, 1);
+                smokersBalance[2] += components[2].price;
+                unlock(moneyTransferSemId, 2, 1);
 
-            sleep(SMOKER_SLEEP);
+                sleep(SMOKER_SLEEP); 
+            }
         }
         unlock(priceChangeSemId, 0, 1);
     }
