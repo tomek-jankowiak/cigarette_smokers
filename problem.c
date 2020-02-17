@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
@@ -11,26 +12,23 @@
 #define SMOKER_STARTING_MONEY 30
 #define AGENT_SLEEP 2
 #define SMOKER_SLEEP 1
-#define COMPONENT_ON_TABLE 2
-#define COMPONENT_NOT_ON_TABLE 1
 #define AMOUNT_OF_ITERATIONS 5
+
 #define PRICES_SHM_KEY 10000
 #define SMOKER_BALANCE_SHM_KEY 20000
 #define PRICES_SEM_KEY 30000
 #define TRANSFER_SEM_KEY 40000
-#define TOBACCO_MSG_KEY 50000
-#define PAPER_MSG_KEY 60000
-#define MATCHES_MSG_KEY 70000
+#define COMPONENT_MSG_KEY 50000
 #define FINISH_SEM_KEY 99999
 
 typedef struct
 {
-    long on_table;
+    long id;
     int price;
 } Component;
 
 int agentId, tobaccoSmokerId, paperSmokerId, matchesSmokerId;
-int pricesShmId, smokersShmId, finishSemId, priceChangeSemId, moneyTransferSemId, tobaccoMsgId, paperMsgId, matchesMsgId;
+int pricesShmId, smokersShmId, finishSemId, priceChangeSemId, moneyTransferSemId, componentsMsgId;
 int *smokersBalance;
 Component *components;
 
@@ -53,7 +51,7 @@ int main()
     components = (Component*)shmat(pricesShmId, NULL, 0);
     for(int i = 0; i < 3; i++)
     {
-        components[i].on_table = 1;
+        components[i].on_table = i + 1;
         components[i].price = 5;
     }
 
@@ -107,23 +105,10 @@ int main()
         perror("Nadanie wartosci semaforowi (koniec)");
         exit(1);
     }
-    // KOLEJKA KOMUNIKATOW (TYTOŃ) 
-    tobaccoMsgId = msgget(TOBACCO_MSG_KEY, IPC_CREAT|0600);
-    if(tobaccoMsgId == -1)
-    {
-        perror("Utworzenie kolejki komunikatow (tyton)");
-        exit(1);
-    }
-    // KOLEJKA KOMUNIKATOW (PAPIER) 
-    paperMsgId = msgget(PAPER_MSG_KEY, IPC_CREAT|0600);
-    if(paperMsgId == -1)
-    {
-        perror("Utworzenie kolejki komunikatow (papier)");
-        exit(1);
-    }
-    // KOLEJKA KOMUNIKATOW (ZAPALKI) 
-    matchesMsgId = msgget(MATCHES_MSG_KEY, IPC_CREAT|0600);
-    if(matchesMsgId == -1)
+
+    // KOLEJKA KOMUNIKATOW (SKALDNIKI)
+    componentsMsgId = msgget(COMPONENT_MSG_KEY, IPC_CREAT|0600);
+    if(componentsMsgId == -1)
     {
         perror("Utworzenie kolejki komunikatow (zapalki)");
         exit(1);
@@ -189,19 +174,9 @@ void tobaccoSmoker()
 {
     for(;;)
     {
-        components[0].on_table = COMPONENT_ON_TABLE;
-        msgsnd(tobaccoMsgId, &components[0], sizeof(components[0].price), 0);
-        
         lock(priceChangeSemId, 0, 1);
         if(smokersBalance[0] >= components[1].price + components[2].price)
-        {
-            msgrcv(paperMsgId, &components[1], sizeof(components[1].price), COMPONENT_ON_TABLE);
-            msgrcv(matchesMsgId, &components[2], sizeof(components[2].price), COMPONENT_ON_TABLE);
-            components[1].on_table = COMPONENT_NOT_ON_TABLE;
-            components[2].on_table = COMPONENT_NOT_ON_TABLE;
-            msgsnd(paperMsgId, &components[1], sizeof(components[1].price), 0);
-            msgsnd(matchesMsgId, &components[2], sizeof(components[2].price), 0);
-            
+        {  
             lock(moneyTransferSemId, 0, 1);
             smokersBalance[0] -= components[1].price + components[2].price;
             unlock(moneyTransferSemId, 0, 1);
