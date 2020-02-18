@@ -11,6 +11,7 @@
 #include <sys/sem.h>
 
 #define SMOKER_STARTING_MONEY 30
+#define PRICE_RAND (SMOKER_STARTING_MONEY / 5)
 #define AGENT_SLEEP 2
 #define SMOKER_SLEEP 1
 #define AMOUNT_OF_ITERATIONS 5
@@ -176,12 +177,14 @@ void agent()
     for(;;)
     {
         lock(priceChangeSemId, 0, 3);
+        printf("\n");
+        printf("ZMIANA KURSU\n");
         for(int i = 0; i < 3; i++)
         {
-            componentsPrices[i] = rand() % (SMOKER_STARTING_MONEY / 3) + 1;
+            componentsPrices[i] = rand() % PRICE_RAND + 1;
             printf("%d ", componentsPrices[i]);
         }
-        printf("\n");
+        printf("\n\n");
         unlock(priceChangeSemId, 0, 3);
         sleep(AGENT_SLEEP);
 
@@ -193,15 +196,18 @@ void tobaccoSmoker()
 {
     for(;;)
     {
-        lock(priceChangeSemId, 0, 1);
-        tobacco.price = componentsPrices[0];
-        lock(componentsOnTableSemId, 0, 1);
-        if(msgsnd(componentsMsgId, &tobacco, sizeof(tobacco.price), 0) == -1)
+        if((smokersBalance[1] >= componentsPrices[0] + componentsPrices[2]) || (smokersBalance[2] >= componentsPrices[0] + componentsPrices[1]))
         {
-            perror("Wyslanie komunikatu (tyton)");
-            exit(1);
+            lock(componentsOnTableSemId, 0, 1);
+            tobacco.price = componentsPrices[0];
+            if(msgsnd(componentsMsgId, &tobacco, sizeof(tobacco.price), 0) == -1)
+            {
+                perror("Wyslanie komunikatu (tyton)");
+                exit(1);
+            }
+            printf("1 kladzie na stol tyton\n");
         }
-        printf("1 kladzie na stol tyton\n");
+        lock(priceChangeSemId, 0, 1);
         if(smokersBalance[0] >= componentsPrices[1] + componentsPrices[2])
         {  
             msgrcv(componentsMsgId, &paper, sizeof(paper.price), 2, 0);
@@ -234,6 +240,8 @@ void tobaccoSmoker()
                 sleep(SMOKER_SLEEP); 
             }
         }
+        else
+            printf("1 - brak srodkow\n");
         unlock(priceChangeSemId, 0, 1);
     }
 }
@@ -242,14 +250,18 @@ void paperSmoker()
 {
     for(;;)
     {
-        lock(priceChangeSemId, 0, 1);
-        lock(componentsOnTableSemId, 1, 1);
-        if(msgsnd(componentsMsgId, &paper, sizeof(paper.price), 0) == -1)
+        if((smokersBalance[0] >= componentsPrices[1] + componentsPrices[2]) || (smokersBalance[2] >= componentsPrices[0] + componentsPrices[1]))
         {
-            perror("Wyslanie komunikatu (papier");
-            exit(1);
+            lock(componentsOnTableSemId, 1, 1);
+            paper.price = componentsPrices[1];
+            if(msgsnd(componentsMsgId, &paper, sizeof(paper.price), 0) == -1)
+            {
+                perror("Wyslanie komunikatu (papier");
+                exit(1);
+            }
+            printf("2 kladzie na stol papier\n");
         }
-        printf("2 kladzie na stol papier\n");
+        lock(priceChangeSemId, 0, 1);
         if(smokersBalance[1] >= componentsPrices[0] + componentsPrices[2])
         {  
             msgrcv(componentsMsgId, &tobacco, sizeof(tobacco.price), 1, 0);
@@ -281,6 +293,9 @@ void paperSmoker()
                 sleep(SMOKER_SLEEP); 
             }
         }
+        else
+            printf("2 - brak srodkow\n");
+        
         unlock(priceChangeSemId, 0, 1);
     }    
 }
@@ -289,14 +304,18 @@ void matchesSmoker()
 {
     for(;;)
     {
-        lock(priceChangeSemId, 0, 1);
-        lock(componentsOnTableSemId, 2, 1);
-        if(msgsnd(componentsMsgId, &matches, sizeof(matches.price), 0) == -1)
+        if((smokersBalance[0] >= componentsPrices[1] + componentsPrices[2]) || (smokersBalance[1] >= componentsPrices[0] + componentsPrices[2]))
         {
-            perror("Wyslanie komunikatu (zapalki)");
-            exit(1);
+            lock(componentsOnTableSemId, 2, 1);
+            matches.price = componentsPrices[2];
+            if(msgsnd(componentsMsgId, &matches, sizeof(matches.price), 0) == -1)
+            {
+                perror("Wyslanie komunikatu (zapalki)");
+                exit(1);
+            }
+            printf("3 kladzie na stol zapalki\n");
         }
-        printf("3 kladzie na stol zapalki\n");
+        lock(priceChangeSemId, 0, 1);
         if(smokersBalance[2] >= componentsPrices[0] + componentsPrices[1])
         {  
             msgrcv(componentsMsgId, &tobacco, sizeof(tobacco.price), 1, 0);
@@ -328,6 +347,8 @@ void matchesSmoker()
                 sleep(SMOKER_SLEEP); 
             }
         }
+        else
+            printf("3 - brak srodkow\n");
         unlock(priceChangeSemId, 0, 1);
     }
 }
