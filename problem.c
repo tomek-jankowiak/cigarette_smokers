@@ -19,7 +19,8 @@
 #define SMOKER_BALANCE_SHM_KEY 30000
 #define PRICES_SEM_KEY 40000
 #define TRANSFER_SEM_KEY 50000
-#define COMPONENT_MSG_KEY 60000
+#define ONTABLE_SEM_KEY 60000
+#define COMPONENT_MSG_KEY 70000
 #define FINISH_SEM_KEY 99999
 
 typedef struct
@@ -29,9 +30,9 @@ typedef struct
 } Component;
 
 int agentId, tobaccoSmokerId, paperSmokerId, matchesSmokerId;
-int pricesShmId, smokersShmId, finishSemId, priceChangeSemId, moneyTransferSemId, componentsMsgId;
-int *smokersBalance;
-Component *components;
+int pricesShmId, smokersShmId, finishSemId, priceChangeSemId, moneyTransferSemId, componentsOnTableSemId, componentsMsgId;
+int *smokersBalance, *componentsPrices;
+Component tobacco, paper, matches;
 
 void agent();
 void tobaccoSmoker();
@@ -43,18 +44,13 @@ void lock(int, int, int);
 int main()
 {
     // PAMIEC WSPOLDZIELONA - CENY SKLADNIKOW
-    pricesShmId = shmget(PRICES_SHM_KEY, 3 * sizeof(Component), IPC_CREAT|0600);
+    pricesShmId = shmget(PRICES_SHM_KEY, 3 * sizeof(int), IPC_CREAT|0600);
     if(pricesShmId == -1)
     {
-        perror("Utworzenie obszaru pamięci wspoldzielonej (skladniki)");
+        perror("Utworzenie obszaru pamieci wspoldzielonej (skladniki)");
         exit(1);
     }
-    components = (Component*)shmat(pricesShmId, NULL, 0);
-    for(int i = 0; i < 3; i++)
-    {
-        components[i].id = i + 1;
-        components[i].price = 5;
-    }
+    componentsPrices = (int*)shmat(pricesShmId, NULL, 0);
 
     // PAMIEC WSPOLDZIELONA - SALDO PALACZY
     smokersShmId = shmget(SMOKER_BALANCE_SHM_KEY, 3 * sizeof(int), IPC_CREAT|0600);
@@ -94,6 +90,20 @@ int main()
             exit(1);
         }
 
+    // SEMAFORY DO ZAPEWNIENIA JEDNEGO SKLADNIKA DANEGO RODZAJU NA STOLE
+    componentsOnTableSemId = semget(ONTABLE_SEM_KEY, 3, IPC_CREAT|0600);
+    if(componentsOnTableSemId == -1)
+    {
+        perror("Utworzenie semafora (stol)");
+        exit(1);
+    }
+    for(int i = 0; i < 3; i++)
+        if(semctl(componentsOnTableSemId, i, SETVAL, 1) == -1)
+        {
+            perror("Nadanie wartosci semaforowi (stol)");
+            exit(1);
+        }
+
     // SEMAFOR DO KONCZENIA PROGRAMU
     finishSemId = semget(FINISH_SEM_KEY, 1, IPC_CREAT|0600);
     if(finishSemId == -1)
@@ -114,6 +124,10 @@ int main()
         perror("Utworzenie kolejki komunikatow (zapalki)");
         exit(1);
     }
+
+    tobacco.id = 1;
+    paper.id = 2;
+    matches.id = 3;
 
     // FORKI    
     switch(agentId = fork())
@@ -164,8 +178,8 @@ void agent()
         lock(priceChangeSemId, 0, 3);
         for(int i = 0; i < 3; i++)
         {
-            components[i].price = rand() % (SMOKER_STARTING_MONEY / 3) + 1;
-            printf("%d ", components[i].price);
+            componentsPrices[i] = rand() % (SMOKER_STARTING_MONEY / 3) + 1;
+            printf("%d ", componentsPrices[i]);
         }
         printf("\n");
         unlock(priceChangeSemId, 0, 3);
@@ -180,29 +194,40 @@ void tobaccoSmoker()
     for(;;)
     {
         lock(priceChangeSemId, 0, 1);
-        msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
+        tobacco.price = componentsPrices[0];
+        lock(componentsOnTableSemId, 0, 1);
+        if(msgsnd(componentsMsgId, &tobacco, sizeof(tobacco.price), 0) == -1)
+        {
+            perror("Wyslanie komunikatu (tyton)");
+            exit(1);
+        }
         printf("1 kladzie na stol tyton\n");
-        if(smokersBalance[0] >= components[1].price + components[2].price)
+        if(smokersBalance[0] >= componentsPrices[1] + componentsPrices[2])
         {  
-            msgrcv(componentsMsgId, components + 1, sizeof(components[1].price), 2, 0);
-            if(msgrcv(componentsMsgId, components + 2, sizeof(components[2].price), 3, IPC_NOWAIT) == -1)
+            msgrcv(componentsMsgId, &paper, sizeof(paper.price), 2, 0);
+            if(msgrcv(componentsMsgId, &matches, sizeof(matches.price), 3, IPC_NOWAIT) == -1)
             {
                 if(errno == ENOMSG)
-                    msgsnd(componentsMsgId, components + 1, sizeof(components[1].price), 0);
+                {
+                    msgsnd(componentsMsgId, &paper, sizeof(paper.price), 0);
+                    printf("1 wzial papier, ale nie ma zapalek. Odklada papier na stol\n");
+                }
             }
             else
             {
                 lock(moneyTransferSemId, 0, 1);
-                smokersBalance[0] -= components[1].price + components[2].price;
+                smokersBalance[0] -= componentsPrices[1] + componentsPrices[2];
                 printf("1 pali, saldo: %d\n", smokersBalance[0]);
+                unlock(componentsOnTableSemId, 1, 1);
+                unlock(componentsOnTableSemId, 2, 1);
                 unlock(moneyTransferSemId, 0, 1);
                 
                 lock(moneyTransferSemId, 1, 1);
-                smokersBalance[1] += components[1].price;
+                smokersBalance[1] += componentsPrices[1];
                 unlock(moneyTransferSemId, 1, 1);
 
                 lock(moneyTransferSemId, 2, 1);
-                smokersBalance[2] += components[2].price;
+                smokersBalance[2] += componentsPrices[2];
                 unlock(moneyTransferSemId, 2, 1);
 
 
@@ -218,29 +243,39 @@ void paperSmoker()
     for(;;)
     {
         lock(priceChangeSemId, 0, 1);
-        msgsnd(componentsMsgId, components, sizeof(components[1].price), 0);
+        lock(componentsOnTableSemId, 1, 1);
+        if(msgsnd(componentsMsgId, &paper, sizeof(paper.price), 0) == -1)
+        {
+            perror("Wyslanie komunikatu (papier");
+            exit(1);
+        }
         printf("2 kladzie na stol papier\n");
-        if(smokersBalance[0] >= components[0].price + components[2].price)
+        if(smokersBalance[1] >= componentsPrices[0] + componentsPrices[2])
         {  
-            msgrcv(componentsMsgId, components, sizeof(components[0].price), 1, 0);
-            if(msgrcv(componentsMsgId, components + 2, sizeof(components[2].price), 3, IPC_NOWAIT) == -1)
+            msgrcv(componentsMsgId, &tobacco, sizeof(tobacco.price), 1, 0);
+            if(msgrcv(componentsMsgId, &matches, sizeof(matches.price), 3, IPC_NOWAIT) == -1)
             {
                 if(errno == ENOMSG)
-                    msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
+                {
+                    msgsnd(componentsMsgId, &tobacco, sizeof(tobacco.price), 0);
+                    printf("2 wzial ze stolu tyton, ale nie ma zapalek. Odklada tyton\n");
+                }
             }
             else
             {
                 lock(moneyTransferSemId, 1, 1);
-                smokersBalance[1] -= components[0].price + components[2].price;
+                smokersBalance[1] -= componentsPrices[0] + componentsPrices[2];
                 printf("2 pali, saldo: %d\n", smokersBalance[1]);
+                unlock(componentsOnTableSemId, 0, 1);
+                unlock(componentsOnTableSemId, 2, 1);
                 unlock(moneyTransferSemId, 1, 1);
                 
                 lock(moneyTransferSemId, 0, 1);
-                smokersBalance[0] += components[0].price;
+                smokersBalance[0] += componentsPrices[0];
                 unlock(moneyTransferSemId, 0, 1);
 
                 lock(moneyTransferSemId, 2, 1);
-                smokersBalance[2] += components[2].price;
+                smokersBalance[2] += componentsPrices[2];
                 unlock(moneyTransferSemId, 2, 1);
 
                 sleep(SMOKER_SLEEP); 
@@ -255,29 +290,39 @@ void matchesSmoker()
     for(;;)
     {
         lock(priceChangeSemId, 0, 1);
-        msgsnd(componentsMsgId, components, sizeof(components[2].price), 0);
+        lock(componentsOnTableSemId, 2, 1);
+        if(msgsnd(componentsMsgId, &matches, sizeof(matches.price), 0) == -1)
+        {
+            perror("Wyslanie komunikatu (zapalki)");
+            exit(1);
+        }
         printf("3 kladzie na stol zapalki\n");
-        if(smokersBalance[0] >= components[0].price + components[1].price)
+        if(smokersBalance[2] >= componentsPrices[0] + componentsPrices[1])
         {  
-            msgrcv(componentsMsgId, components, sizeof(components[0].price), 1, 0);
-            if(msgrcv(componentsMsgId, components + 1, sizeof(components[1].price), 2, IPC_NOWAIT) == -1)
+            msgrcv(componentsMsgId, &tobacco, sizeof(tobacco.price), 1, 0);
+            if(msgrcv(componentsMsgId, &paper, sizeof(paper.price), 2, IPC_NOWAIT) == -1)
             {
                 if(errno == ENOMSG)
-                    msgsnd(componentsMsgId, components, sizeof(components[0].price), 0);
+                {
+                    msgsnd(componentsMsgId, &tobacco, sizeof(tobacco.price), 0);
+                    printf("3 wzial ze stolu tyton, ale nie ma papieru. Odklada tyton\n");
+                }
             }
             else
             {
                 lock(moneyTransferSemId, 2, 1);
-                smokersBalance[2] -= components[0].price + components[1].price;
+                smokersBalance[2] -= componentsPrices[0] + componentsPrices[1];
                 printf("3 pali, saldo: %d\n", smokersBalance[2]);
+                unlock(componentsOnTableSemId, 0, 1);
+                unlock(componentsOnTableSemId, 1, 1);
                 unlock(moneyTransferSemId, 2, 1);
                 
                 lock(moneyTransferSemId, 0, 1);
-                smokersBalance[0] += components[0].price;
+                smokersBalance[0] += componentsPrices[0];
                 unlock(moneyTransferSemId, 0, 1);
 
                 lock(moneyTransferSemId, 1, 1);
-                smokersBalance[1] += components[1].price;
+                smokersBalance[1] += componentsPrices[1];
                 unlock(moneyTransferSemId, 1, 1);
 
                 sleep(SMOKER_SLEEP); 
