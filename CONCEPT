@@ -1,0 +1,43 @@
+REALIZACJA ZADANIA 'PALACZE TYTONIU'
+
+1. PARAMETRY
+Parametry znajdują się na początku kodu źródłowego, zaraz pod załączonymi bibliotekami.
+- SMOKER_STARTING_MONEY - określa początkowy stan konta każdego z palaczy
+- PRICE_RAND - określa zakres cen składników w formacie [1, PRICE_RAND]
+- AGENT_SLEEP - czas zatrzymania procesu agenta po zmianie kursu
+- SMOKER_SLEEP - czas palenia
+- AMOUNT_OF_ITERATION - liczba iteracji, warunek zakończenia programu
+
+2. MECHANIZMY KOMUNIKACJI I SYNCHRONIZACJI
+W celu zsynchronizowania i skomunikowania ze sobą procesów, w rozwiązaniu użyto sktruktur IPC.
+
+2.1 PAMIĘĆ WSPÓŁDZIELONA
+Zadeklarowane zostały dwa obszary pamięci współdzielonej:
+- pricesShmId - przechowuje tablicę 3-elementową zawierającą ceny składników, zawsze w tej samej kolejności (indeks: 0 - tytoń, 1 - papier, 2 - zapałki).
+- smokersShmId - przechowuje tablicę 3-elementową zawierającą aktualny stan konta każdego z palaczy.
+
+2.2 SEMsAFORY
+- priceChangeSemId - Jeden semafor z wartością początkową równą 3, służący do zabezpieczenia zmiany cen składników.
+- moneyTransferSemId - tablica trzech semaforów binarnych do zabezpieczenia transakcji pomiędzy palaczami. Każdy z palaczy posiada swój semafor.
+- componentsOnTableSemId - talica trzech semaforów binarnych zabezpieczających stól w taki sposób, żeby znajdował się na nim tylko jeden składnik danego rodzaju (trzy semafory, ponieważ są trzy składniki).
+- finishSemId - jeden semafor służący do wyeliminowania problemu aktywnego czekania w procesie macierzystym przed zakończeniem programu.
+
+2.3 KOLEJKI KOMUNIKATÓW
+Zgodnie z treścią zadania, składniki mają być przekazywane między palaczami poprzez kolejkę komunikatów (componentsMsgId).
+
+
+3. PROCES MACIERZYSTY
+Jest odpowiedzialny za utworzenie obszarów pamięci współdzielonej, tablic semaforów, kolejek komunikatów, utworzenie oraz zakończenie procesów potomnych.
+Program zakończy się, gdy będzie możliwe opuszczenie semafora finishSemId o wartość równą parametrowi AMOUNT_OF_ITERATIONS. Semafor ten jest inicjalizowany z wartością 0 i jest zwiększany tylko przez agenta. Jeśli uda się ten semafor opuścić, proces macierzysty kończy wszystkie procesy potomne funkcją kill i kończy program.
+
+4. PROCESY POTOMNE
+4.1 PROCES AGENTA
+Agent w nieskończonej pętli for dokonuje zmian cen składników. Dojdzie do tego tylko, gdy uda mu się zamknąć semafor priceChangeId o 3, czyli wtedy, gdy żaden z palaczy nie pali, ani nie dokonuje transkacji. Ceny są ustalane funkcją rand() i zapisywane do tablicy będącej w pamięci współdzielonej.
+Po zakończonej operacji zmiany kursu agent podnosi semafor, zasypia na chwilę oraz zwiększa wartość semafora finishSemId o 1.
+
+4.2 PROCES PALACZA
+Każdy palacz jest reprezentowany przez osobny proces i ma swoją funkcję (tobaccoSmoker, paperSmoker, matchesSmoker).
+W nieskończonej pętli for każdy palacz sprawdza najpierw, czy któryś z dwóch pozostałych ma wystarczające środki by kupić jego składnik oraz składnik, którego jeszcze będzie mu brakować. Jeśli warunek ten jest spełniony, dany palacz wykłada na stół swój składnik, opuszczając przy tym odpowiedni semafor (componentsOnTableSemId) oraz wysyłając składnik do kolejki komunikatów.
+Następnie sprawdza, czy sam ma wystarczające środki na zakup brakujących składników. Jeśli tak, odbiera je z kolejki komunikatów sprawdzając id (1 - tytoń, 2 - papier, 3 - zapałki). Ponieważ może się zdarzyć sytuacja, w której jeden palacz weźmie jeden składnik, a inny drugi składnik, oczekiwanie na drugi odbywa się z flagą IPC_NOWAIT. W przypadku błędu (czyli nie otrzymaniu składnika), palacz zwraca ten, który wziął z powrotem do kolejki.
+Jeśli któremuś z palaczy uda się zebrać dwa potrzebne składniki, dokonuje on odpowiednich tranzakcji pieniędzy, zmniejszając swój stan konta i zwiększając stany kont pozostałych oraz podnosi semafory tych dwóch składników, które zabrał ze stołu (componentsOnTableSemId), a następnie pali (sleep(SMOKER_SLEEP)).
+Każdy z palaczy zabezpiecza się przed zmianą kursu, opuszczając semafor (priceChangeSemId) o 1. Nie blokuje w ten sposób pozostałych palaczy, ponieważ wartość semafora początkowo wynosi 3, a uniemożliwa agentowi zmianę cen (agent opuszcza i podnosi semafor o wartość 3). 
